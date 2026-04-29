@@ -43,12 +43,29 @@ func (r *walletRepository) LockByIDs(ctx context.Context, ids []string) (model.W
 		return nil, err
 	}
 
+	// FOR NO KEY UPDATE — not FOR UPDATE — is the correct row-level lock here.
+	//
+	// `INSERT INTO transfers (..., from_wallet_id, to_wallet_id, ...)` runs
+	// before this SELECT inside the same transaction (Claim first, then lock).
+	// That INSERT's foreign-key check on transfers.from_wallet_id /
+	// transfers.to_wallet_id acquires FOR KEY SHARE on the referenced wallet
+	// rows. FOR UPDATE conflicts with FOR KEY SHARE; FOR NO KEY UPDATE does
+	// not. Concurrent transfers that each hold FOR KEY SHARE on the same
+	// wallet (from their own FK check) would all then queue on FOR UPDATE
+	// and deadlock (Postgres SQLSTATE 40P01). FOR NO KEY UPDATE breaks the
+	// cycle without weakening write serialization: it is mutually exclusive
+	// with itself, so two concurrent debits on the same wallet still
+	// serialize correctly.
+	//
+	// We never UPDATE wallets.id (the only "key" column), so the "no key"
+	// part is honest — FOR NO KEY UPDATE gives us all the write-side
+	// guarantees we actually need.
 	const sqlText = `
 SELECT id, balance_minor, currency, created_at, updated_at
 FROM wallets
 WHERE id = ANY($1)
 ORDER BY id
-FOR UPDATE`
+FOR NO KEY UPDATE`
 
 	rows, err := q.Raw(sqlText, sortedIDs).Rows()
 	if err != nil {
@@ -92,10 +109,16 @@ func (r *walletRepository) ApplyBalanceDeltas(ctx context.Context, deltas []repo
 		return err
 	}
 
-	// Build:  UPDATE wallets SET balance_minor = balance_minor + CASE id
-	//             WHEN $1 THEN $2 WHEN $3 THEN $4 ... END,
+	// Build:  UPDATE wallets
+	//         SET balance_minor = balance_minor + CASE id
+	//                 WHEN $1 THEN $2::bigint
+	//                 WHEN $3 THEN $4::bigint ... END,
 	//             updated_at = NOW()
 	//         WHERE id IN ($1, $3, ...)
+	//
+	// The `::bigint` casts on the THEN branches are required: Postgres can't
+	// infer the parameter type inside a CASE expression and would otherwise
+	// resolve them as `text`, causing `bigint + text` (42883) at execute time.
 	var (
 		sb       strings.Builder
 		args     = make([]any, 0, len(deltas)*2)
@@ -105,7 +128,7 @@ func (r *walletRepository) ApplyBalanceDeltas(ctx context.Context, deltas []repo
 	for i, d := range deltas {
 		idIdx := i*2 + 1
 		valIdx := i*2 + 2
-		fmt.Fprintf(&sb, " WHEN $%d THEN $%d", idIdx, valIdx)
+		fmt.Fprintf(&sb, " WHEN $%d THEN $%d::bigint", idIdx, valIdx)
 		args = append(args, d.WalletID, d.Delta.Minor())
 		if i > 0 {
 			idArgsCS.WriteString(", ")
