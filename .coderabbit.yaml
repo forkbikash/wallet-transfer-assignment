@@ -90,6 +90,14 @@ reviews:
     - "!bin/**"
     - "!dist/**"
 
+  # Unit test generation is a Pro+/Enterprise-only feature; disable it to
+  # avoid the "not available on your plan" error on every review.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
   tools:
     # CI already runs golangci-lint v2.5.0; CodeRabbit's pass would duplicate.
     golangci-lint:
