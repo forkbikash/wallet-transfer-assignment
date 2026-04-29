@@ -14,7 +14,10 @@ jobs:
     name: lint-format-test
     runs-on: ubuntu-latest
     env:
-      CGO_ENABLED: "0"
+      # `make test` runs with `-race`, which requires cgo. The runtime
+      # Docker image still builds with CGO_ENABLED=0 for a static binary;
+      # that is set in the Dockerfile, not here.
+      CGO_ENABLED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
