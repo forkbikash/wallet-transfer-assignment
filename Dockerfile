@@ -16,11 +16,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server 
 # --- Runtime stage ---
 FROM alpine:3.19
 
-# Non-root user for safety.
-RUN addgroup -S app && adduser -S app -G app
-
-# CA certs needed for outbound TLS (e.g. future webhooks).
-RUN apk add --no-cache ca-certificates
+# Non-root user for safety; CA certs for outbound TLS (e.g. future webhooks).
+RUN addgroup -S app && adduser -S app -G app && \
+    apk add --no-cache ca-certificates
 
 COPY --from=builder /out/server /app/server
 COPY migrations /app/migrations

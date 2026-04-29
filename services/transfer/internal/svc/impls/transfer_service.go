@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	apperr "github.com/Robustrade/wallet-transfer-assignment/common/error"
+	"github.com/Robustrade/wallet-transfer-assignment/common/util/money"
 	"github.com/Robustrade/wallet-transfer-assignment/services/transfer/internal/data/model"
 	"github.com/Robustrade/wallet-transfer-assignment/services/transfer/internal/data/request"
 	"github.com/Robustrade/wallet-transfer-assignment/services/transfer/internal/data/response"
@@ -62,70 +63,100 @@ func (s *transferService) CreateTransfer(
 
 	var resp response.TransferResp
 	err := s.tx.Run(ctx, func(ctx context.Context) error {
-		t, replayed, err := s.claimOrReplay(ctx, req, requestHash)
-		if err != nil {
-			return err
-		}
-		if replayed {
-			s.logger.InfoContext(ctx, "transfer idempotent replay",
-				"idempotency_key", req.IdempotencyKey,
-				"transfer_id", t.ID,
-				"original_status", t.Status,
-			)
-			resp = response.FromTransfer(*t, true)
-			return nil
-		}
-
-		// Lock both wallets in lex order via a single round-trip.
-		wallets, err := s.wallets.LockByIDs(ctx, []string{req.FromWalletID, req.ToWalletID})
-		if err != nil {
-			return err
-		}
-		from, to, ok := wallets.Pick(req.FromWalletID, req.ToWalletID)
-		if !ok {
-			return apperr.ErrWalletNotFound
-		}
-
-		// Domain checks. Insufficient funds and currency mismatch are business
-		// outcomes — they commit a FAILED row so subsequent replays return the
-		// same error rather than re-attempting.
-		if from.Currency != to.Currency {
-			return s.markFailedAndCommit(ctx, *t, from.Currency, model.ReasonCurrencyMismatch, &resp)
-		}
-		if from.Balance.Lt(req.AmountMoney()) {
-			return s.markFailedAndCommit(ctx, *t, from.Currency, model.ReasonInsufficientFunds, &resp)
-		}
-
-		t.Currency = from.Currency
-
-		if err := s.ledger.Append(ctx, t.LedgerEntries()); err != nil {
-			return err
-		}
-
-		amount := req.AmountMoney()
-		if err := s.wallets.ApplyBalanceDeltas(ctx, []repoiface.BalanceDelta{
-			{WalletID: from.ID, Delta: amount.Neg()},
-			{WalletID: to.ID, Delta: amount},
-		}); err != nil {
-			return err
-		}
-
-		if !t.MarkProcessed() {
-			return apperr.ErrInternal.WithMessage("invalid state transition to PROCESSED")
-		}
-		updatedAt, err := s.transfers.UpdateOutcome(ctx, t.ID, t.Status, t.Currency, nil)
-		if err != nil {
-			return err
-		}
-		t.UpdatedAt = updatedAt
-
-		resp = response.FromTransfer(*t, false)
-		return nil
+		return s.runInsideTx(ctx, req, requestHash, &resp)
 	})
 	if err != nil {
 		return response.TransferResp{}, err
 	}
 	return resp, nil
+}
+
+// runInsideTx claims (or replays) the idempotency key and either returns the
+// previously-committed result or processes the new transfer end-to-end.
+func (s *transferService) runInsideTx(
+	ctx context.Context,
+	req request.CreateTransferReq,
+	requestHash string,
+	resp *response.TransferResp,
+) error {
+	t, replayed, err := s.claimOrReplay(ctx, req, requestHash)
+	if err != nil {
+		return err
+	}
+	if replayed {
+		s.logger.InfoContext(ctx, "transfer idempotent replay",
+			"idempotency_key", req.IdempotencyKey,
+			"transfer_id", t.ID,
+			"original_status", t.Status,
+		)
+		*resp = response.FromTransfer(*t, true)
+		return nil
+	}
+	return s.processNewTransfer(ctx, t, req, resp)
+}
+
+// processNewTransfer locks both wallets, runs domain checks, and either
+// commits a FAILED outcome or writes the ledger and updates balances.
+func (s *transferService) processNewTransfer(
+	ctx context.Context,
+	t *model.Transfer,
+	req request.CreateTransferReq,
+	resp *response.TransferResp,
+) error {
+	// Lock both wallets in lex order via a single round-trip.
+	wallets, err := s.wallets.LockByIDs(ctx, []string{req.FromWalletID, req.ToWalletID})
+	if err != nil {
+		return err
+	}
+	from, to, ok := wallets.Pick(req.FromWalletID, req.ToWalletID)
+	if !ok {
+		return apperr.ErrWalletNotFound
+	}
+
+	// Domain checks. Insufficient funds and currency mismatch are business
+	// outcomes — they commit a FAILED row so subsequent replays return the
+	// same error rather than re-attempting.
+	if from.Currency != to.Currency {
+		return s.markFailedAndCommit(ctx, *t, from.Currency, model.ReasonCurrencyMismatch, resp)
+	}
+	if from.Balance.Lt(req.AmountMoney()) {
+		return s.markFailedAndCommit(ctx, *t, from.Currency, model.ReasonInsufficientFunds, resp)
+	}
+
+	t.Currency = from.Currency
+	if err := s.applyAndComplete(ctx, t, from.ID, to.ID, req.AmountMoney()); err != nil {
+		return err
+	}
+	*resp = response.FromTransfer(*t, false)
+	return nil
+}
+
+// applyAndComplete writes ledger entries, applies balance deltas, and marks
+// the transfer PROCESSED in storage.
+func (s *transferService) applyAndComplete(
+	ctx context.Context,
+	t *model.Transfer,
+	fromID, toID string,
+	amount money.Money,
+) error {
+	if err := s.ledger.Append(ctx, t.LedgerEntries()); err != nil {
+		return err
+	}
+	if err := s.wallets.ApplyBalanceDeltas(ctx, []repoiface.BalanceDelta{
+		{WalletID: fromID, Delta: amount.Neg()},
+		{WalletID: toID, Delta: amount},
+	}); err != nil {
+		return err
+	}
+	if !t.MarkProcessed() {
+		return apperr.ErrInternal.WithMessage("invalid state transition to PROCESSED")
+	}
+	updatedAt, err := s.transfers.UpdateOutcome(ctx, t.ID, t.Status, t.Currency, nil)
+	if err != nil {
+		return err
+	}
+	t.UpdatedAt = updatedAt
+	return nil
 }
 
 // claimOrReplay either inserts a new PENDING transfer or, on key collision,

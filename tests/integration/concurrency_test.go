@@ -13,6 +13,60 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// runDebitGoroutine performs a single transfer in C1 and tallies the outcome.
+// Extracted from the C1 goroutine body to keep cognitive complexity low.
+func runDebitGoroutine(
+	t *testing.T,
+	env *testEnv,
+	i int,
+	amount int64,
+	successCnt, failCnt, other *atomic.Int32,
+	errs chan<- string,
+) {
+	t.Helper()
+	status, body, err := env.callTransfer(transferReq{
+		IdempotencyKey: fmt.Sprintf("c1-%d", i),
+		FromWalletID:   "source",
+		ToWalletID:     "sink",
+		Amount:         amount,
+	})
+	if err != nil {
+		errs <- fmt.Sprintf("goroutine %d: %v", i, err)
+		return
+	}
+	classifyDebitOutcome(t, i, status, body, successCnt, failCnt, other, errs)
+}
+
+// classifyDebitOutcome buckets the HTTP outcome of one C1 transfer.
+func classifyDebitOutcome(
+	t *testing.T,
+	i int,
+	status int,
+	body []byte,
+	successCnt, failCnt, other *atomic.Int32,
+	errs chan<- string,
+) {
+	t.Helper()
+	switch status {
+	case http.StatusCreated:
+		successCnt.Add(1)
+	case http.StatusUnprocessableEntity:
+		var resp transferResp
+		if uerr := json.Unmarshal(body, &resp); uerr != nil {
+			errs <- fmt.Sprintf("goroutine %d: unmarshal: %v", i, uerr)
+			return
+		}
+		if resp.Status == "FAILED" {
+			failCnt.Add(1)
+		} else {
+			other.Add(1)
+		}
+	default:
+		other.Add(1)
+		t.Logf("unexpected status %d body=%s", status, body)
+	}
+}
+
 // C1 — N concurrent debits on the same wallet.
 //
 // Initial balance is exactly 30 * amount. We launch N=50 goroutines that each
@@ -42,34 +96,7 @@ func TestC1_ConcurrentDebitsSameWallet(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			status, body, err := env.callTransfer(transferReq{
-				IdempotencyKey: fmt.Sprintf("c1-%d", i),
-				FromWalletID:   "source",
-				ToWalletID:     "sink",
-				Amount:         amount,
-			})
-			if err != nil {
-				errs <- fmt.Sprintf("goroutine %d: %v", i, err)
-				return
-			}
-			switch status {
-			case http.StatusCreated:
-				successCnt.Add(1)
-			case http.StatusUnprocessableEntity:
-				var resp transferResp
-				if uerr := json.Unmarshal(body, &resp); uerr != nil {
-					errs <- fmt.Sprintf("goroutine %d: unmarshal: %v", i, uerr)
-					return
-				}
-				if resp.Status == "FAILED" {
-					failCnt.Add(1)
-				} else {
-					other.Add(1)
-				}
-			default:
-				other.Add(1)
-				t.Logf("unexpected status %d body=%s", status, body)
-			}
+			runDebitGoroutine(t, env, i, amount, &successCnt, &failCnt, &other, errs)
 		}(i)
 	}
 	wg.Wait()

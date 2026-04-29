@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: wallet
       POSTGRES_USER: wallet
-      POSTGRES_PASSWORD: wallet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wallet}
     ports:
       - "5432:5432"
     healthcheck:
@@ -24,7 +24,7 @@ services:
         condition: service_healthy
     environment:
       PORT: "8080"
-      DATABASE_URL: "postgres://wallet:wallet@postgres:5432/wallet?sslmode=disable"
+      DATABASE_URL: "postgres://wallet:${POSTGRES_PASSWORD:-wallet}@postgres:5432/wallet?sslmode=disable"
       LOG_JSON: "true"
       LOG_LEVEL: "info"
     ports:
