@@ -13,16 +13,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// debitCounters bundles the three per-outcome counters used by C1.
+type debitCounters struct {
+	success *atomic.Int32
+	fail    *atomic.Int32
+	other   *atomic.Int32
+}
+
 // runDebitGoroutine performs a single transfer in C1 and tallies the outcome.
 // Extracted from the C1 goroutine body to keep cognitive complexity low.
-func runDebitGoroutine(
-	t *testing.T,
-	env *testEnv,
-	i int,
-	amount int64,
-	successCnt, failCnt, other *atomic.Int32,
-	errs chan<- string,
-) {
+func runDebitGoroutine(t *testing.T, env *testEnv, i int, amount int64, c debitCounters, errs chan<- string) {
 	t.Helper()
 	status, body, err := env.callTransfer(transferReq{
 		IdempotencyKey: fmt.Sprintf("c1-%d", i),
@@ -34,22 +34,15 @@ func runDebitGoroutine(
 		errs <- fmt.Sprintf("goroutine %d: %v", i, err)
 		return
 	}
-	classifyDebitOutcome(t, i, status, body, successCnt, failCnt, other, errs)
+	classifyDebitOutcome(t, i, status, body, c, errs)
 }
 
 // classifyDebitOutcome buckets the HTTP outcome of one C1 transfer.
-func classifyDebitOutcome(
-	t *testing.T,
-	i int,
-	status int,
-	body []byte,
-	successCnt, failCnt, other *atomic.Int32,
-	errs chan<- string,
-) {
+func classifyDebitOutcome(t *testing.T, i int, status int, body []byte, c debitCounters, errs chan<- string) {
 	t.Helper()
 	switch status {
 	case http.StatusCreated:
-		successCnt.Add(1)
+		c.success.Add(1)
 	case http.StatusUnprocessableEntity:
 		var resp transferResp
 		if uerr := json.Unmarshal(body, &resp); uerr != nil {
@@ -57,12 +50,12 @@ func classifyDebitOutcome(
 			return
 		}
 		if resp.Status == "FAILED" {
-			failCnt.Add(1)
+			c.fail.Add(1)
 		} else {
-			other.Add(1)
+			c.other.Add(1)
 		}
 	default:
-		other.Add(1)
+		c.other.Add(1)
 		t.Logf("unexpected status %d body=%s", status, body)
 	}
 }
@@ -96,7 +89,11 @@ func TestC1_ConcurrentDebitsSameWallet(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			runDebitGoroutine(t, env, i, amount, &successCnt, &failCnt, &other, errs)
+			runDebitGoroutine(t, env, i, amount, debitCounters{
+				success: &successCnt,
+				fail:    &failCnt,
+				other:   &other,
+			}, errs)
 		}(i)
 	}
 	wg.Wait()
