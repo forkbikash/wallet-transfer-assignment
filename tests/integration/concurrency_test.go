@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // C1 — N concurrent debits on the same wallet.
@@ -38,6 +37,7 @@ func TestC1_ConcurrentDebitsSameWallet(t *testing.T) {
 		failCnt    atomic.Int32
 		other      atomic.Int32
 	)
+	errs := make(chan string, concurrent)
 	for i := 0; i < concurrent; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -48,13 +48,19 @@ func TestC1_ConcurrentDebitsSameWallet(t *testing.T) {
 				ToWalletID:     "sink",
 				Amount:         amount,
 			})
-			require.NoError(t, err)
+			if err != nil {
+				errs <- fmt.Sprintf("goroutine %d: %v", i, err)
+				return
+			}
 			switch status {
 			case http.StatusCreated:
 				successCnt.Add(1)
 			case http.StatusUnprocessableEntity:
 				var resp transferResp
-				require.NoError(t, json.Unmarshal(body, &resp))
+				if uerr := json.Unmarshal(body, &resp); uerr != nil {
+					errs <- fmt.Sprintf("goroutine %d: unmarshal: %v", i, uerr)
+					return
+				}
 				if resp.Status == "FAILED" {
 					failCnt.Add(1)
 				} else {
@@ -67,6 +73,13 @@ func TestC1_ConcurrentDebitsSameWallet(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Errorf("transfer error: %s", e)
+	}
+	if t.Failed() {
+		return
+	}
 
 	assert.Equal(t, int32(successful), successCnt.Load(), "exactly %d transfers should succeed", successful)
 	assert.Equal(t, int32(concurrent-successful), failCnt.Load(), "the rest should be FAILED")
@@ -95,6 +108,7 @@ func TestC2_ConcurrentSameIdempotencyKey(t *testing.T) {
 		bodies   = make([][]byte, concurrent)
 		statuses = make([]int, concurrent)
 	)
+	errs := make(chan string, concurrent)
 	for i := 0; i < concurrent; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -105,18 +119,30 @@ func TestC2_ConcurrentSameIdempotencyKey(t *testing.T) {
 				ToWalletID:     "sink",
 				Amount:         100,
 			})
-			require.NoError(t, err)
+			if err != nil {
+				errs <- fmt.Sprintf("goroutine %d: %v", i, err)
+				return
+			}
 			statuses[i] = status
 			bodies[i] = body
 		}(i)
 	}
 	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Errorf("transfer error: %s", e)
+	}
+	if t.Failed() {
+		return
+	}
 
 	// Exactly one 201 (the winner) and the rest 200 (replays).
 	var created, replayed int
 	for i, s := range statuses {
 		var r transferResp
-		require.NoError(t, json.Unmarshal(bodies[i], &r))
+		if err := json.Unmarshal(bodies[i], &r); err != nil {
+			t.Fatalf("unmarshal[%d]: %v", i, err)
+		}
 		switch s {
 		case http.StatusCreated:
 			created++
@@ -210,19 +236,22 @@ func TestC4_MixedConcurrency(t *testing.T) {
 
 	var wg sync.WaitGroup
 
+	errs := make(chan string, replays+uniques)
+
 	// Replays: all share the key "shared".
 	for i := 0; i < replays; i++ {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			_, _, err := env.callTransfer(transferReq{
+			if _, _, err := env.callTransfer(transferReq{
 				IdempotencyKey: "shared",
 				FromWalletID:   "wallet_a",
 				ToWalletID:     "wallet_b",
 				Amount:         100,
-			})
-			require.NoError(t, err)
-		}()
+			}); err != nil {
+				errs <- fmt.Sprintf("replay %d: %v", i, err)
+			}
+		}(i)
 	}
 
 	// Uniques: each has its own key.
@@ -230,16 +259,24 @@ func TestC4_MixedConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, _, err := env.callTransfer(transferReq{
+			if _, _, err := env.callTransfer(transferReq{
 				IdempotencyKey: fmt.Sprintf("u-%d", i),
 				FromWalletID:   "wallet_a",
 				ToWalletID:     "wallet_b",
 				Amount:         100,
-			})
-			require.NoError(t, err)
+			}); err != nil {
+				errs <- fmt.Sprintf("unique %d: %v", i, err)
+			}
 		}(i)
 	}
 	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Errorf("transfer error: %s", e)
+	}
+	if t.Failed() {
+		return
+	}
 
 	// Exactly 1 + uniques transfer rows; 2 * (1 + uniques) ledger rows.
 	wantTransfers := 1 + uniques

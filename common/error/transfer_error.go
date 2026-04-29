@@ -13,19 +13,19 @@ var (
 	ErrInvalidAmount = &AppError{
 		Code:       "INVALID_AMOUNT",
 		HTTPStatus: http.StatusBadRequest,
-		Message:    "amount must be a positive integer",
+		Message:    "amount is invalid",
 	}
 
 	ErrInvalidIdempotencyKey = &AppError{
 		Code:       "INVALID_IDEMPOTENCY_KEY",
 		HTTPStatus: http.StatusBadRequest,
-		Message:    "idempotencyKey is required",
+		Message:    "idempotencyKey is invalid",
 	}
 
 	ErrInvalidWalletID = &AppError{
 		Code:       "INVALID_WALLET_ID",
 		HTTPStatus: http.StatusBadRequest,
-		Message:    "fromWalletId and toWalletId are required",
+		Message:    "wallet id is invalid",
 	}
 
 	ErrIdempotencyConflict = &AppError{

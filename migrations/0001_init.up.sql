@@ -27,6 +27,12 @@ CREATE TABLE transfers (
     from_wallet_id  VARCHAR(64)  NOT NULL REFERENCES wallets(id),
     to_wallet_id    VARCHAR(64)  NOT NULL REFERENCES wallets(id),
     amount_minor    BIGINT       NOT NULL CHECK (amount_minor > 0),
+    -- Currency is the canonical wallet currency, written at outcome time.
+    -- The empty-string allowance is intentional: a transfer is INSERTed in
+    -- PENDING state before the wallets are locked, so the currency is not
+    -- yet known. UpdateOutcome (the only path that moves PENDING -> terminal)
+    -- always writes a 3-char ISO code, so committed terminal rows satisfy
+    -- char_length(currency) = 3.
     currency        VARCHAR(3)   NOT NULL CHECK (char_length(currency) = 3 OR currency = ''),
     status          VARCHAR(16)  NOT NULL CHECK (status IN ('PENDING','PROCESSED','FAILED')),
     failure_reason  TEXT,

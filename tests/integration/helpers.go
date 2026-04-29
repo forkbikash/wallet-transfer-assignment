@@ -78,6 +78,7 @@ type testEnv struct {
 	DB     *gorm.DB
 	sqlDB  *sql.DB
 	Server *httptest.Server
+	client *http.Client
 }
 
 // setupTestEnv connects to the configured Postgres, applies migrations,
@@ -102,10 +103,10 @@ func setupTestEnv(t *testing.T) *testEnv {
 	truncateAll(t, sqlDB)
 
 	router := mux.NewRouter()
-	transferinit.InitTransferService(router, transferinit.Config{
+	require.NoError(t, transferinit.InitTransferService(router, transferinit.Config{
 		DB:     db,
 		Logger: infra.InitLogger(infra.LoggerConfig{Level: "warn"}),
-	})
+	}))
 
 	server := httptest.NewServer(router)
 
@@ -114,7 +115,12 @@ func setupTestEnv(t *testing.T) *testEnv {
 		_ = sqlDB.Close()
 	})
 
-	return &testEnv{t: t, DB: db, sqlDB: sqlDB, Server: server}
+	// Per-call timeout so a deadlocked handler fails the test fast instead of
+	// hanging until `go test -timeout` fires. The transfer flow is bounded by
+	// a couple of round-trips to Postgres; 10s is comfortably above the 99p.
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	return &testEnv{t: t, DB: db, sqlDB: sqlDB, Server: server, client: client}
 }
 
 // applyMigrations brings the database up to the latest version.
@@ -133,6 +139,11 @@ func applyMigrations(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("migrations: new: %w", err)
 	}
+	// golang-migrate holds a source handle and a database handle; both must
+	// be released or successive calls leak goroutines and connections. We
+	// don't pass `db` ownership in here, so close only the migrator's
+	// references — the caller still owns `db`.
+	defer func() { _, _ = m.Close() }()
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrations: up: %w", err)
 	}
@@ -236,7 +247,12 @@ func (e *testEnv) callTransfer(req transferReq) (int, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	resp, err := http.Post(e.Server.URL+"/transfers", "application/json", bytes.NewReader(b))
+	httpReq, err := http.NewRequest(http.MethodPost, e.Server.URL+"/transfers", bytes.NewReader(b))
+	if err != nil {
+		return 0, nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := e.client.Do(httpReq)
 	if err != nil {
 		return 0, nil, err
 	}

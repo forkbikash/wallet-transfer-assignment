@@ -48,6 +48,16 @@ func TestCreateTransferReq_Validate_Errors(t *testing.T) {
 			wantErr: apperr.ErrInvalidWalletID,
 		},
 		{
+			name:    "from wallet id with leading whitespace",
+			mutate:  func(r *request.CreateTransferReq) { r.FromWalletID = " wallet_a" },
+			wantErr: apperr.ErrInvalidWalletID,
+		},
+		{
+			name:    "to wallet id with trailing whitespace",
+			mutate:  func(r *request.CreateTransferReq) { r.ToWalletID = "wallet_b\t" },
+			wantErr: apperr.ErrInvalidWalletID,
+		},
+		{
 			name:    "same wallet",
 			mutate:  func(r *request.CreateTransferReq) { r.ToWalletID = r.FromWalletID },
 			wantErr: apperr.ErrSameWallet,

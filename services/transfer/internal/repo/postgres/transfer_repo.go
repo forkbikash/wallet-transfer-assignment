@@ -1,15 +1,13 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
-
-	"context"
-
 	"gorm.io/gorm"
 
 	apperr "github.com/Robustrade/wallet-transfer-assignment/common/error"

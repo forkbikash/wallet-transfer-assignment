@@ -56,13 +56,19 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // WriteJSON writes the supplied value as a JSON response with the given status.
+//
+// Encoding errors after WriteHeader cannot be recovered (the client has
+// already received the status code), so the best we can do is surface them in
+// logs for forensics.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if v == nil {
 		return
 	}
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Default().Error("failed to encode JSON response", "error", err, "status", status)
+	}
 }
 
 // NotFoundHandler returns 404 with a JSON body. Use it to override gorilla/mux's

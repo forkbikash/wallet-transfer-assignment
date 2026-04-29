@@ -23,8 +23,10 @@ linters:
     errcheck:
       check-type-assertions: true
     gosec:
-      excludes:
-        - G404 # math/rand is fine in tests
+      # Production code does not use math/rand. The test-file gosec exclusion
+      # below also catches this, so the global G404 exclusion is intentionally
+      # absent — re-add it only if a future test pattern needs it outside the
+      # `_test.go` filename convention.
     errorlint:
       errorf: true
       asserts: true

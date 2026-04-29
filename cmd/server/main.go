@@ -43,10 +43,12 @@ func run() error {
 	slog.SetDefault(cfg.Logger)
 
 	router := mux.NewRouter()
-	transferinit.InitTransferService(router, transferinit.Config{
+	if err := transferinit.InitTransferService(router, transferinit.Config{
 		DB:     cfg.DB,
 		Logger: cfg.Logger,
-	})
+	}); err != nil {
+		return err
+	}
 
 	router.HandleFunc("/healthz", health.Handler(cfg.DB)).Methods(http.MethodGet)
 

@@ -219,4 +219,4 @@ func TestI5_IdempotencyConflict(t *testing.T) {
 	assert.Equal(t, 2, env.ledgerCount())
 }
 
-func walletName(i int) string { return "wallet_" + string(rune('a'+i)) }
+func walletName(i int) string { return fmt.Sprintf("wallet_%d", i) }

@@ -30,15 +30,24 @@ const (
 
 // Validate performs syntactic validation of the request body. It returns
 // an *apperr.AppError so the handler can map to the right HTTP status.
+//
+// Wallet IDs are matched against the database verbatim, so leading/trailing
+// whitespace would produce a confusing WALLET_NOT_FOUND. Reject those at the
+// boundary instead of silently trimming — the client should send canonical
+// IDs, and a quiet trim could mask a marshalling bug on their end.
 func (r *CreateTransferReq) Validate() error {
-	if strings.TrimSpace(r.IdempotencyKey) == "" {
-		return apperr.ErrInvalidIdempotencyKey
+	if r.IdempotencyKey == "" || strings.TrimSpace(r.IdempotencyKey) == "" {
+		return apperr.ErrInvalidIdempotencyKey.WithMessage("idempotencyKey is required")
 	}
 	if len(r.IdempotencyKey) > MaxIdempotencyKeyLen {
 		return apperr.ErrInvalidIdempotencyKey.WithMessage("idempotencyKey is too long")
 	}
-	if strings.TrimSpace(r.FromWalletID) == "" || strings.TrimSpace(r.ToWalletID) == "" {
-		return apperr.ErrInvalidWalletID
+	if r.FromWalletID == "" || r.ToWalletID == "" {
+		return apperr.ErrInvalidWalletID.WithMessage("fromWalletId and toWalletId are required")
+	}
+	if r.FromWalletID != strings.TrimSpace(r.FromWalletID) ||
+		r.ToWalletID != strings.TrimSpace(r.ToWalletID) {
+		return apperr.ErrInvalidWalletID.WithMessage("wallet id must not contain leading or trailing whitespace")
 	}
 	if len(r.FromWalletID) > MaxWalletIDLen || len(r.ToWalletID) > MaxWalletIDLen {
 		return apperr.ErrInvalidWalletID.WithMessage("wallet id is too long")
@@ -47,7 +56,7 @@ func (r *CreateTransferReq) Validate() error {
 		return apperr.ErrSameWallet
 	}
 	if r.Amount <= 0 {
-		return apperr.ErrInvalidAmount
+		return apperr.ErrInvalidAmount.WithMessage("amount must be a positive integer")
 	}
 	return nil
 }

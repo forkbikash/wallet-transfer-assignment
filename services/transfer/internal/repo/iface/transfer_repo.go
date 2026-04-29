@@ -17,9 +17,9 @@ type TransferRepoIface interface {
 	// DB-populated timestamps. On idempotency-key conflict (claimed=false),
 	// `transfer` is the previously-committed row.
 	//
-	// The Postgres unique-index xmax lock causes concurrent attempts on the
-	// same key to block until the first transaction commits or rolls back, so
-	// the returned conflict row reflects committed state.
+	// Implementations MUST guarantee that the conflict-path transfer reflects
+	// committed state — concurrent claims on the same idempotency_key must
+	// not return a row from a still-running transaction.
 	Claim(ctx context.Context, t model.Transfer) (claimed bool, transfer *model.Transfer, err error)
 
 	// UpdateOutcome moves a transfer from PENDING to a terminal state and writes

@@ -6,6 +6,13 @@ DATABASE_URL ?= postgres://wallet:wallet@localhost:5432/wallet?sslmode=disable
 INTEGRATION_DATABASE_URL ?= $(DATABASE_URL)
 PORT ?= 8080
 
+.PHONY: all
+all: build ## Default target — build the server binary.
+
+.PHONY: clean
+clean: ## Remove build artifacts and coverage output.
+	rm -rf bin/ coverage/
+
 .PHONY: build
 build: ## Build the server binary.
 	go build -trimpath -o bin/server ./cmd/server
