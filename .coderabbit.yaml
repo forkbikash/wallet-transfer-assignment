@@ -1,0 +1,113 @@
+# CodeRabbit configuration for the wallet-transfer-assignment repo.
+# Docs: https://docs.coderabbit.ai/guides/configure-coderabbit
+#
+# Mirrors the review focus from .github/copilot-instructions.md so the AI
+# reviewer evaluates PRs the way a senior backend engineer would for a
+# wallet-transfer service: correctness > cleverness, transactional safety,
+# exactly-once semantics, ledger integrity, layering.
+
+language: en-US
+early_access: false
+tone_instructions: |
+  Be concise and actionable. Lead with correctness, reliability, and
+  maintainability concerns; only mention style after substantive issues.
+  Quote file:line when pointing at code.
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  # Path-scoped review focus.
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        Review as a senior backend engineer evaluating a wallet-transfer
+        service. Focus on:
+        - correctness before cleverness
+        - transactional safety (single tx, READ COMMITTED + SELECT FOR UPDATE
+          in lexicographic id order)
+        - idempotency guarantees (UNIQUE constraint on idempotency_key +
+          Postgres xmax lock + request_hash strict-body match)
+        - concurrency handling for debits on the same wallet
+        - exactly-once semantics at the API level
+        - ledger consistency and double-entry correctness
+          (one DEBIT and one CREDIT per transfer)
+        - clean separation between handler, service, repository, and model
+          layers
+        - test quality and coverage of critical behaviors
+        - clear error handling and safe state transitions
+        Flag:
+        - missing or weak uniqueness constraints for idempotency
+        - unsafe transaction boundaries
+        - balance updates that can race under concurrent writes
+        - missing ledger entries or unbalanced debit/credit records
+        - handlers that contain business logic
+        - repositories that embed workflow decisions
+        - tests that assert implementation detail instead of behavior
+        Suggest simpler designs when the solution is overengineered.
+
+    - path: "migrations/*.sql"
+      instructions: |
+        Review SQL migrations for:
+        - sensible table design with primary keys and foreign keys
+        - UNIQUE constraints on idempotency-bearing columns
+        - CHECK constraints preventing invalid states (non-negative balance,
+          positive amount, distinct from/to wallets, allowed enum values)
+        - useful indexes (note: Postgres does NOT auto-index the *referencing*
+          side of a foreign key — explicit indexes are needed there)
+        - down migration drops in dependency-respecting order
+
+    - path: "**/*_test.go"
+      instructions: |
+        Tests should assert observable behavior (HTTP status, response bodies,
+        DB row counts and sums, balances, ledger invariants) — never SQL
+        strings, log line literals, or specific function-call counts.
+        Concurrency tests should launch goroutines and assert invariants
+        (zero-sum, exactly-N successes) rather than specific event ordering.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Verify workflows run on a runner the repo owner actually has
+        (ubuntu-latest is the safe default for forks). Flag any commands that
+        depend on repository variables that aren't set, and any secrets
+        referenced without fallback behavior.
+
+  # Skip the file types where AI review is noise on this codebase.
+  path_filters:
+    - "!go.sum"
+    - "!coverage/**"
+    - "!bin/**"
+    - "!dist/**"
+
+  tools:
+    # CI already runs golangci-lint v2.5.0; CodeRabbit's pass would duplicate.
+    golangci-lint:
+      enabled: false
+    gitleaks:
+      enabled: true
+    markdownlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    actionlint:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
+  pull_requests:
+    scope: auto
