@@ -3,7 +3,7 @@
 A wallet-to-wallet transfer service in Go, backed by PostgreSQL. The service
 exposes a single endpoint:
 
-```
+```text
 POST /transfers
 {
   "idempotencyKey": "abc123",
@@ -37,7 +37,7 @@ Your PR branch should be named: `solution/<your-name>` (e.g., `solution/jane-doe
 
 # PR README
 
-```
+```text
 HTTP handler  ->  service (orchestration)  ->  repository (Postgres)  ->  database
 ```
 
@@ -55,7 +55,7 @@ never used.
 
 ### Directory layout
 
-```
+```text
 cmd/server/                                       boot, DI wiring, graceful shutdown
 services/transfer/init                             service initializer
 services/transfer/route                            HTTP route registration

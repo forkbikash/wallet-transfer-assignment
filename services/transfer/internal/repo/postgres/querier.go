@@ -21,15 +21,25 @@ import (
 type txKey struct{}
 
 // withTx returns a new context carrying the given transactional *gorm.DB.
+// A nil tx is rejected: storing it would let mustTxQuerier hand back a nil
+// pointer that panics on first use, which is the opposite of what the
+// missing-tx error path is for.
 func withTx(ctx context.Context, tx *gorm.DB) context.Context {
+	if tx == nil {
+		return ctx
+	}
 	return context.WithValue(ctx, txKey{}, tx)
 }
 
 // txFromContext returns the active transactional *gorm.DB from the context,
-// if any.
+// if any. Returns ok=false if no value is stored OR if the stored value is
+// a typed-nil *gorm.DB.
 func txFromContext(ctx context.Context) (*gorm.DB, bool) {
 	tx, ok := ctx.Value(txKey{}).(*gorm.DB)
-	return tx, ok
+	if !ok || tx == nil {
+		return nil, false
+	}
+	return tx, true
 }
 
 // errMissingTx is returned by mustTxQuerier when no transaction is in the

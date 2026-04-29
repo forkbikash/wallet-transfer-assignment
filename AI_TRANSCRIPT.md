@@ -34,7 +34,7 @@ I drove the session in a strict **plan-then-execute** loop:
 1. *"go through the wallet-transfer-assignment code repository and plan the
    solution. Follow the [path to an internal Go service codebase, redacted]
    for practices to be followed. Always follow good practices like SOLID
-   design principles, object oriented design and design patterns."*
+   design principles, object-oriented design and design patterns."*
 
 2. *"look at the following wallet system design and let's improve the plan if
    needed."* (followed by the ByteByteGo Ch. 28 *Digital Wallet* chapter
@@ -165,7 +165,7 @@ I drove the session in a strict **plan-then-execute** loop:
     error response bodies must include a `request_id` field so a client
     can quote the JSON in a bug report. Ran the test:
 
-    ```
+    ```text
     --- FAIL: TestWriteError_IncludesRequestIDInBody (0.00s)
         Error: Not equal: expected: string("trace-abc-123") actual: <nil>
     ```
@@ -174,7 +174,7 @@ I drove the session in a strict **plan-then-execute** loop:
     it from `RequestIDFromContext` in `WriteError`, `NotFoundHandler`,
     and `MethodNotAllowedHandler`. Ran the same test:
 
-    ```
+    ```text
     ok    common/middleware    0.556s
     ```
 
