@@ -15,10 +15,4 @@ var (
 		HTTPStatus: http.StatusUnprocessableEntity,
 		Message:    "insufficient funds",
 	}
-
-	ErrCurrencyMismatch = &AppError{
-		Code:       "CURRENCY_MISMATCH",
-		HTTPStatus: http.StatusUnprocessableEntity,
-		Message:    "wallet currencies differ",
-	}
 )

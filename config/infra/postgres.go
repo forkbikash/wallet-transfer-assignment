@@ -4,7 +4,6 @@ package infra
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -19,9 +18,6 @@ type PostgresConfig struct {
 	MaxIdleConns    int           // default 5
 	ConnMaxLifetime time.Duration // default 30m
 	PingTimeout     time.Duration // default 5s
-	// Logger, when set, is the slog handler used for GORM's slow-query and
-	// error logs. Nil falls back to GORM's default discard logger.
-	Logger *slog.Logger
 }
 
 // InitPostgres opens a GORM-managed Postgres pool, configures the underlying

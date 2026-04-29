@@ -37,6 +37,8 @@ func NewTransferHandler(svc svciface.TransferServiceIface) *TransferHandler {
 //	409 Conflict           on idempotency-key reuse with a different request body
 //	5xx                    on an internal error
 func (h *TransferHandler) CreateTransfer(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
+
 	// DisallowUnknownFields gives strict idempotency: the body that produced
 	// `request_hash` must match exactly. A duplicate request with a key seen
 	// before but with extra fields is a client bug we want to surface, not

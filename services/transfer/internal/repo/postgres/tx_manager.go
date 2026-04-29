@@ -17,9 +17,9 @@ import (
 // methods can transparently participate.
 //
 // READ COMMITTED is sufficient because the transfer flow uses
-// `SELECT ... FOR UPDATE` to lock the participating wallet rows; once the
-// rows are locked, a stable snapshot of *unlocked* rows (which REPEATABLE
-// READ would buy) is irrelevant.
+// `SELECT ... FOR NO KEY UPDATE` to lock the participating wallet rows;
+// once the rows are locked, a stable snapshot of *unlocked* rows (which
+// REPEATABLE READ would buy) is irrelevant.
 type txManager struct {
 	db     *gorm.DB
 	logger *slog.Logger

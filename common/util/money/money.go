@@ -6,6 +6,12 @@
 package money
 
 // Money is an amount expressed in minor units of some currency.
+//
+// Add / Sub / Neg wrap on int64 overflow (the Go spec for signed-integer
+// arithmetic). int64 minor units saturate at ~9.2e18, which in INR paisa
+// is ~9.2e16 rupees — practically unreachable for a single wallet — but the
+// type does not check for it. Callers operating on attacker-controllable or
+// unbounded inputs must validate the magnitude themselves.
 type Money int64
 
 // FromMinor constructs a Money from an int64 expressed in minor units.

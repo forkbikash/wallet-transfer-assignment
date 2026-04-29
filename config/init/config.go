@@ -33,14 +33,22 @@ type ServiceInstances struct {
 // returns the wired ServiceInstances. The returned instance carries a Close
 // method for graceful shutdown of the DB pool.
 func LoadConfig(ctx context.Context) (*ServiceInstances, error) {
+	shutdownTimeout, err := envDurationOrDefault("SHUTDOWN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	common := CommonConfig{
 		Port:            envOrDefault("PORT", "8080"),
-		ShutdownTimeout: envDurationOrDefault("SHUTDOWN_TIMEOUT", 10*time.Second),
+		ShutdownTimeout: shutdownTimeout,
 	}
 
+	logJSON, err := envBool("LOG_JSON", true)
+	if err != nil {
+		return nil, err
+	}
 	logger := infra.InitLogger(infra.LoggerConfig{
 		Level: os.Getenv("LOG_LEVEL"),
-		JSON:  envBool("LOG_JSON", true),
+		JSON:  logJSON,
 	})
 
 	dsn := os.Getenv("DATABASE_URL")
@@ -48,12 +56,34 @@ func LoadConfig(ctx context.Context) (*ServiceInstances, error) {
 		return nil, fmt.Errorf("config: DATABASE_URL is required")
 	}
 
+	// DB_MAX_OPEN_CONNS default is intentionally conservative. Concurrent
+	// transfers serialize on the per-wallet row lock anyway, so a larger pool
+	// does not raise throughput on hot wallets — it just lets more goroutines
+	// hold connections while waiting on locks. Tune up via env when running
+	// against a workload with many independent wallets in parallel.
+	maxOpenConns, err := envIntOrDefault("DB_MAX_OPEN_CONNS", 10)
+	if err != nil {
+		return nil, err
+	}
+	maxIdleConns, err := envIntOrDefault("DB_MAX_IDLE_CONNS", 5)
+	if err != nil {
+		return nil, err
+	}
+	connMaxLifetime, err := envDurationOrDefault("DB_CONN_MAX_LIFETIME", 30*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	pingTimeout, err := envDurationOrDefault("DB_PING_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := infra.InitPostgres(ctx, infra.PostgresConfig{
 		DSN:             dsn,
-		MaxOpenConns:    envIntOrDefault("DB_MAX_OPEN_CONNS", 10),
-		MaxIdleConns:    envIntOrDefault("DB_MAX_IDLE_CONNS", 5),
-		ConnMaxLifetime: envDurationOrDefault("DB_CONN_MAX_LIFETIME", 30*time.Minute),
-		PingTimeout:     envDurationOrDefault("DB_PING_TIMEOUT", 5*time.Second),
+		MaxOpenConns:    maxOpenConns,
+		MaxIdleConns:    maxIdleConns,
+		ConnMaxLifetime: connMaxLifetime,
+		PingTimeout:     pingTimeout,
 	})
 	if err != nil {
 		return nil, err
@@ -81,40 +111,41 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-func envIntOrDefault(key string, def int) int {
+func envIntOrDefault(key string, def int) (int, error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		return def
+		return def, nil
 	}
 	out, err := strconv.Atoi(v)
 	if err != nil {
-		return def
+		return 0, fmt.Errorf("config: %s is not a valid integer (%q): %w", key, v, err)
 	}
-	return out
+	return out, nil
 }
 
-func envDurationOrDefault(key string, def time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if strings.TrimSpace(v) == "" {
-		return def
+func envDurationOrDefault(key string, def time.Duration) (time.Duration, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def, nil
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return def
+		return 0, fmt.Errorf("config: %s is not a valid duration (%q): %w", key, v, err)
 	}
-	return d
+	return d, nil
 }
 
-func envBool(key string, def bool) bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+func envBool(key string, def bool) (bool, error) {
+	raw := os.Getenv(key)
+	v := strings.ToLower(strings.TrimSpace(raw))
 	switch v {
 	case "":
-		return def
+		return def, nil
 	case "1", "true", "yes", "y", "on":
-		return true
+		return true, nil
 	case "0", "false", "no", "n", "off":
-		return false
+		return false, nil
 	default:
-		return def
+		return false, fmt.Errorf("config: %s is not a valid bool (%q)", key, raw)
 	}
 }

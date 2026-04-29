@@ -77,6 +77,12 @@ RETURNING created_at, updated_at`
 // UpdateOutcome moves a transfer from PENDING to a terminal state and writes
 // the canonical currency. Returns the new updated_at so the caller can refresh
 // any in-memory copy of the transfer.
+//
+// The `status = 'PENDING'` predicate cements the PENDING -> terminal state
+// machine at the storage layer: a row already in PROCESSED / FAILED is left
+// untouched and the call surfaces as ErrNoRows. Today the call graph keeps
+// this from happening (only the in-flight transaction touches the row), but
+// the guard closes the door against a future caller that reuses the method.
 func (r *transferRepository) UpdateOutcome(
 	ctx context.Context,
 	id uuid.UUID,
@@ -95,7 +101,7 @@ SET status         = $1,
     currency       = $2,
     failure_reason = $3,
     updated_at     = NOW()
-WHERE id = $4
+WHERE id = $4 AND status = 'PENDING'
 RETURNING updated_at`
 
 	var updatedAt time.Time
@@ -104,7 +110,7 @@ RETURNING updated_at`
 	case scanErr == nil:
 		return updatedAt, nil
 	case errors.Is(scanErr, sql.ErrNoRows):
-		return time.Time{}, fmt.Errorf("transfer_repo: transfer %s not found", id)
+		return time.Time{}, fmt.Errorf("transfer_repo: transfer %s not in PENDING state", id)
 	default:
 		return time.Time{}, fmt.Errorf("transfer_repo: update outcome: %w", scanErr)
 	}
