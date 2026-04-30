@@ -35,6 +35,20 @@ func (e *AppError) Error() string {
 // Unwrap exposes the underlying cause for errors.Is / errors.As.
 func (e *AppError) Unwrap() error { return e.Wrapped }
 
+// Is reports whether the target error is an *AppError with the same Code.
+// Without this, errors.Is(err, ErrSentinel) would silently return false for
+// errors produced by WithWrap / WithMessage — those return a *copy* of the
+// sentinel, so the default == identity check on pointer values misses.
+// Pinning equality to the Code field matches the user-facing contract: codes
+// are the stable identifier, messages and wrapped causes are not.
+func (e *AppError) Is(target error) bool {
+	var ae *AppError
+	if !errors.As(target, &ae) {
+		return false
+	}
+	return e.Code == ae.Code
+}
+
 // WithWrap returns a copy of the error with the supplied cause attached.
 // The original sentinel is not mutated.
 func (e *AppError) WithWrap(cause error) *AppError {

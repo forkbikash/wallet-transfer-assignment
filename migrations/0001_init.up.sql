@@ -1,4 +1,3 @@
--- 0001_init.up.sql
 -- Wallet transfer service initial schema.
 --
 -- Design notes:
@@ -14,8 +13,13 @@
 
 CREATE TABLE wallets (
     id            VARCHAR(64)  PRIMARY KEY,
-    balance_minor BIGINT       NOT NULL DEFAULT 0 CHECK (balance_minor >= 0),
-    currency      VARCHAR(3)   NOT NULL CHECK (char_length(currency) = 3),
+    -- Constraint names are pinned explicitly so the repo layer's
+    -- SQLSTATE+constraint-name error mapping doesn't depend on Postgres's
+    -- default-naming convention for inline column constraints.
+    balance_minor BIGINT       NOT NULL DEFAULT 0
+                  CONSTRAINT wallets_balance_minor_check CHECK (balance_minor >= 0),
+    currency      VARCHAR(3)   NOT NULL
+                  CONSTRAINT wallets_currency_check CHECK (char_length(currency) = 3),
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
@@ -24,8 +28,10 @@ CREATE TABLE transfers (
     id              UUID         PRIMARY KEY,
     idempotency_key VARCHAR(255) NOT NULL UNIQUE,
     request_hash    VARCHAR(64)  NOT NULL CHECK (char_length(request_hash) = 64),
-    from_wallet_id  VARCHAR(64)  NOT NULL REFERENCES wallets(id),
-    to_wallet_id    VARCHAR(64)  NOT NULL REFERENCES wallets(id),
+    from_wallet_id  VARCHAR(64)  NOT NULL
+                    CONSTRAINT transfers_from_wallet_id_fkey REFERENCES wallets(id),
+    to_wallet_id    VARCHAR(64)  NOT NULL
+                    CONSTRAINT transfers_to_wallet_id_fkey REFERENCES wallets(id),
     amount_minor    BIGINT       NOT NULL CHECK (amount_minor > 0),
     -- Currency is the canonical wallet currency, written at outcome time.
     -- The empty-string allowance is intentional: a transfer is INSERTed in

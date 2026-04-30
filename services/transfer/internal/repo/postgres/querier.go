@@ -5,14 +5,15 @@
 // raw-SQL executor (`tx.Raw(...).Row().Scan(...)`, `tx.Exec(...)`). We do
 // NOT use GORM's ORM, query-builder, AutoMigrate, hooks, or struct-scan
 // features — every statement issued from this package is hand-written
-// parameterized SQL, so the database schema is owned by the migrations
-// (`migrations/0001_init.up.sql`) rather than by reflection over Go structs.
+// parameterized SQL, so the database schema is owned by the SQL files
+// under `migrations/` rather than by reflection over Go structs.
 package postgres
 
 import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -66,15 +67,31 @@ const (
 	sqlstateCheckViolation      = "23514"
 )
 
-// isPgSQLState reports whether err is a Postgres error with the given SQLSTATE.
-// We avoid pulling pgx/pgconn into the application layer by relying on the
-// `SQLState() string` interface that pgx errors satisfy in v5. GORM passes
-// the underlying driver error through verbatim (we set TranslateError=false
-// in the gorm config), so this still works.
-func isPgSQLState(err error, code string) bool {
-	var pgErr interface{ SQLState() string }
-	if errors.As(err, &pgErr) {
-		return pgErr.SQLState() == code
+// Constraint names emitted by Postgres for the schema in `migrations/`.
+// These follow Postgres's default naming for inline column constraints
+// (`<table>_<column>_<suffix>`). Mapping a SQLSTATE-only check to a
+// specific business error is fragile — a future schema change could add
+// a new constraint that fires the same SQLSTATE — so error mapping always
+// pairs the SQLSTATE with the expected constraint name.
+const (
+	constraintWalletsBalanceCheck     = "wallets_balance_minor_check"
+	constraintTransfersFromWalletFKey = "transfers_from_wallet_id_fkey"
+	constraintTransfersToWalletFKey   = "transfers_to_wallet_id_fkey"
+)
+
+// isPgConstraintViolation reports whether err is a Postgres error with the
+// given SQLSTATE *and* the given constraint name. Pairing SQLSTATE with the
+// constraint name keeps error mapping precise: a generic 23514 mapping to
+// ErrInsufficientFunds would misclassify any new CHECK that gets added later
+// to the same table.
+//
+// GORM passes the underlying pgx driver error through verbatim (we set
+// TranslateError=false in the gorm config), so errors.As reaches the
+// *pgconn.PgError without translation.
+func isPgConstraintViolation(err error, sqlstate, constraint string) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
 	}
-	return false
+	return pgErr.SQLState() == sqlstate && pgErr.ConstraintName == constraint
 }

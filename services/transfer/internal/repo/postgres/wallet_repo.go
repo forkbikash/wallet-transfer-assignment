@@ -141,9 +141,14 @@ func (r *walletRepository) ApplyBalanceDeltas(ctx context.Context, deltas []repo
 
 	res := q.Exec(sb.String(), args...)
 	if res.Error != nil {
-		// A CHECK violation surfaces here; treat as insufficient funds for the
-		// rare case validation under-lock failed.
-		if isPgSQLState(res.Error, sqlstateCheckViolation) {
+		// Only the balance_minor CHECK can fire from this UPDATE — the
+		// statement doesn't touch `currency`, so the currency CHECK can't be
+		// re-evaluated. We pin the mapping to that specific constraint so a
+		// future schema change that adds another CHECK doesn't silently start
+		// surfacing as INSUFFICIENT_FUNDS. Anything else falls through to a
+		// generic 5xx, which is the right answer for an unexpected schema
+		// rule firing.
+		if isPgConstraintViolation(res.Error, sqlstateCheckViolation, constraintWalletsBalanceCheck) {
 			return apperr.ErrInsufficientFunds.WithWrap(res.Error)
 		}
 		return fmt.Errorf("wallet_repo: apply balance deltas: %w", res.Error)

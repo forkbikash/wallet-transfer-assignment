@@ -65,7 +65,12 @@ RETURNING created_at, updated_at`
 			return false, nil, err
 		}
 		return false, existing, nil
-	case isPgSQLState(scanErr, sqlstateForeignKeyViolation):
+	case isPgConstraintViolation(scanErr, sqlstateForeignKeyViolation, constraintTransfersFromWalletFKey),
+		isPgConstraintViolation(scanErr, sqlstateForeignKeyViolation, constraintTransfersToWalletFKey):
+		// Pin the mapping to the two wallet-referencing FKs. If a future
+		// migration adds another FK from `transfers` (e.g. to `accounts`),
+		// a violation there should surface as a 5xx rather than be
+		// misclassified as a missing wallet.
 		return false, nil, apperr.ErrWalletNotFound.WithWrap(scanErr)
 	default:
 		return false, nil, fmt.Errorf("transfer_repo: insert: %w", scanErr)
