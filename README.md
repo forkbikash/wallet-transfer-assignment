@@ -184,21 +184,35 @@ rolled-back attempt execute fresh.
 
 ## Concurrency strategy
 
-We use **READ COMMITTED + `SELECT ... FOR UPDATE`** with deterministic lock
-ordering:
+We use **READ COMMITTED + `SELECT ... FOR NO KEY UPDATE`** with deterministic
+lock ordering:
 
 ```sql
 SELECT id, balance_minor, currency, ...
 FROM wallets
 WHERE id = ANY($1::text[])
 ORDER BY id
-FOR UPDATE
+FOR NO KEY UPDATE
 ```
 
 - A single round-trip locks both wallet rows.
-- Sorting wallet IDs lexicographically before the SELECT is what guarantees
-  deadlock-freedom: any two transactions touching the same pair always acquire
-  locks in the same order.
+- Sorting wallet IDs lexicographically before the SELECT is necessary for
+  deterministic lock-acquisition order, but on its own is **not** sufficient
+  for deadlock-freedom — see the lock-mode note below.
+- **`FOR NO KEY UPDATE`, not `FOR UPDATE`**, is the correct lock mode here.
+  The flow is *Claim first, then lock*: `INSERT INTO transfers (...,
+  from_wallet_id, to_wallet_id, ...)` runs **before** this SELECT in the same
+  transaction, and that INSERT's foreign-key check on
+  `transfers.from_wallet_id` / `transfers.to_wallet_id` implicitly acquires
+  `FOR KEY SHARE` on the referenced wallet rows. `FOR UPDATE` conflicts with
+  `FOR KEY SHARE`; `FOR NO KEY UPDATE` does not. Two concurrent transfers
+  touching the same wallet would each hold `FOR KEY SHARE` from their own FK
+  check and then queue on each other's `FOR UPDATE` — Postgres detects the
+  cycle and aborts one with `40P01`. `FOR NO KEY UPDATE` breaks that cycle
+  without weakening write serialization: it is mutually exclusive with itself,
+  so two concurrent debits on the same wallet still serialize correctly. We
+  never `UPDATE wallets.id` (the only key column), so the "no key" caveat is
+  honest. This bug was caught by the **C4** mixed-concurrency test.
 - Once both rows are locked, balance validation, ledger insertion, and balance
   updates run inside the critical section.
 - The DB-level `CHECK (balance_minor >= 0)` is the last-line defense against
@@ -206,7 +220,8 @@ FOR UPDATE
 
 We deliberately avoid `SERIALIZABLE`: it would require a `40001` retry loop on
 serialization failure, and the cost-benefit is unfavorable for a small,
-well-understood critical section that is already deadlock-free.
+well-understood critical section that is already deadlock-free under
+`FOR NO KEY UPDATE`.
 
 ---
 
@@ -467,7 +482,7 @@ Concurrency tests:
 | C1  | 50 goroutines debit one wallet, exactly 30 succeed and 20 are FAILED             |
 | C2  | 100 goroutines submit the same idempotency key, exactly 1 transfer + 2 ledger    |
 | C3  | Cross-wallet bidirectional load, no deadlocks, balances net to zero change       |
-| C4  | Mixed load (40 same-key + 40 unique), invariants from I3 hold                    |
+| C4  | 80-goroutine mixed load (40 same-key replays + 40 unique transfers); ledger zero-sum + `balance_minor == initial + ledger net`; first reproduced the `40P01` that drove the `FOR UPDATE` → `FOR NO KEY UPDATE` change |
 
 ---
 
@@ -477,9 +492,14 @@ Concurrency tests:
   body returns `409 IDEMPOTENCY_CONFLICT`.
 - **No async worker / outbox**. `PENDING` is a transient mid-transaction state.
   Process crashes mid-transaction roll back the row entirely; no zombie rows.
-- **READ COMMITTED + `FOR UPDATE`** is preferred over `SERIALIZABLE`: the
-  pessimistic lock on the participating wallets is the canonical way to avoid
-  the read-then-write race, and it does not require `40001` retry handling.
+- **READ COMMITTED + `FOR NO KEY UPDATE`** is preferred over `SERIALIZABLE`:
+  the pessimistic lock on the participating wallets is the canonical way to
+  avoid the read-then-write race, and it does not require `40001` retry
+  handling. `FOR NO KEY UPDATE` (not `FOR UPDATE`) is required because the
+  in-flight `INSERT INTO transfers` already holds `FOR KEY SHARE` on the
+  referenced wallet rows (FK enforcement) — using `FOR UPDATE` would deadlock
+  with itself across concurrent transfers. See "Concurrency strategy" above
+  for the full reasoning.
 - **Per-entity repositories** (Wallet, Transfer, Ledger) are kept separate to
   match the convention from an internal Go service codebase from a prior
   project. Each repo is small (2-3 methods).
@@ -544,7 +564,7 @@ exercise - but the **mental models** are not.
 | Immutable event log (Kafka, file-based)             | `ledger_entries` (append-only, `BIGSERIAL`)                        |
 | Materialized state (RocksDB cache)                  | `wallets.balance_minor` (denormalized for O(1) authz)              |
 | Phase status table (TC/C bookkeeping)               | `transfers.status` (`PROCESSED` / `FAILED`)                         |
-| Distributed transaction (TC/C, Saga, 2PC)           | Single Postgres transaction with `SELECT FOR UPDATE`                |
+| Distributed transaction (TC/C, Saga, 2PC)           | Single Postgres transaction with `SELECT FOR NO KEY UPDATE`         |
 | Raft consensus replication                          | Postgres streaming replication (operator concern)                  |
 | CQRS write/read separation                          | Same DB, ledger=write-side, balance=read-view, test asserts equality |
 | Reproducibility (replay events)                     | Test I3: `SUM(ledger)` per wallet == `wallets.balance_minor`        |
@@ -599,7 +619,7 @@ How AI was used in practice:
 
 What the human author owned:
 
-- The choice of Postgres + `FOR UPDATE` over alternatives (Saga, event
+- The choice of Postgres + `FOR NO KEY UPDATE` over alternatives (Saga, event
   sourcing, optimistic locking).
 - The decision to mirror an internal reference codebase's
   `services/<name>/{init,route,internal/...}` layout.
