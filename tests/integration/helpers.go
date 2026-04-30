@@ -147,11 +147,12 @@ func applyMigrations(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("migrations: new: %w", err)
 	}
-	// golang-migrate holds a source handle and a database handle; both must
-	// be released or successive calls leak goroutines and connections. We
-	// don't pass `db` ownership in here, so close only the migrator's
-	// references — the caller still owns `db`.
-	defer func() { _, _ = m.Close() }()
+	// Don't call m.Close(). golang-migrate's Postgres driver closes the
+	// underlying *sql.DB when its Close() runs, even though we passed the
+	// connection in via WithInstance and still own it. The caller continues
+	// to use db after this returns; closing it here would surface as
+	// "sql: database is closed" on the next query. The migrate instance and
+	// the file-source goroutine are GC'd when this function returns.
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrations: up: %w", err)
 	}
