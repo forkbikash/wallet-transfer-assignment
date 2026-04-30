@@ -7,7 +7,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the full source tree.
+# Copy the full source tree. `.dockerignore` is the safety boundary here —
+# .env*, .git, secrets, build artifacts, and host-only files (Makefile, *.md,
+# docker-compose.yml, etc.) are excluded from the build context. The runtime
+# stage further narrows what ships: only `/out/server` and `migrations` get
+# copied into the final image.
 COPY . .
 
 # Build a static binary.

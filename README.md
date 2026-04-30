@@ -433,6 +433,10 @@ make compose-down
 make test
 
 # Integration + concurrency tests (requires a running Postgres).
+# Note: for assignment scope, the integration tests default to the SAME
+# Postgres instance used by `make run` / `make seed`. Each test TRUNCATEs the
+# tables in setUp, so running `make test-int` will wipe any interactively
+# seeded rows. Override INTEGRATION_DATABASE_URL to use a separate database.
 make pg-up
 make migrate-up
 INTEGRATION_DATABASE_URL=postgres://wallet:wallet@localhost:5432/wallet?sslmode=disable \

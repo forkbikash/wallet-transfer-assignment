@@ -3,6 +3,11 @@ SHELL := /bin/bash
 # Defaults can be overridden via the environment, e.g.:
 #   DATABASE_URL=... make migrate-up
 DATABASE_URL ?= postgres://wallet:wallet@localhost:5432/wallet?sslmode=disable
+# For assignment scope, integration tests default to the same Postgres
+# instance used by `make run` / `make seed` (a single dev DB). The tests
+# TRUNCATE all tables in setupTestEnv, so running `make test-int` will wipe
+# any rows created interactively. Override INTEGRATION_DATABASE_URL to point
+# at a separate database if you want to keep the dev data intact.
 INTEGRATION_DATABASE_URL ?= $(DATABASE_URL)
 PORT ?= 8080
 

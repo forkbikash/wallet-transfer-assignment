@@ -4,6 +4,14 @@
 // a real Postgres instance. These tests run only when the `integration` build
 // tag is set and require the INTEGRATION_DATABASE_URL environment variable.
 //
+// SCOPE NOTE — for the assignment scope, INTEGRATION_DATABASE_URL defaults to
+// the same DSN as DATABASE_URL (see Makefile). That is, the integration tests
+// share the dev Postgres instance used by `make run` and `make seed`. Each
+// test starts with `TRUNCATE`, so running `make test-int` will wipe any
+// interactively-seeded rows. A production-grade setup would point this at a
+// dedicated test database (or testcontainers); we intentionally don't, to
+// keep the local-run story to a single Postgres.
+//
 // IMPORTANT: tests in this package share a single Postgres schema and rely on
 // `TRUNCATE` in setupTestEnv to start each test with a clean slate. Therefore
 // these tests MUST NOT call t.Parallel() — running them in parallel would let
