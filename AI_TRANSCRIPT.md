@@ -1,16 +1,8 @@
 # AI Usage — Session Prompts
 
-Per `ASSIGNMENT.md` §AI usage:
-
-> A transcript of your entire session with your AI tool of choice. You can add
-> this to the repo or email it to us with your submission. If for some reason,
-> this is not possible, give us all the prompts that you used with the AI.
-
-The tool used was **Claude Code** (Anthropic's CLI for Claude). The full
-verbatim transcript with model responses is preserved in Claude Code's local
-session log and can be exported on request. As a fallback this file lists the
-major prompts I sent during the session so the work is reproducible from the
-prompts alone.
+The tool used was **Claude Code** (Anthropic's CLI for Claude). This file
+lists the major prompts I sent during the session so the work is reproducible
+from the prompts alone.
 
 ## Workflow
 
@@ -20,12 +12,11 @@ I drove the session in a strict **plan-then-execute** loop:
    codebase from a prior project (used as a reference for engineering
    conventions) before writing any code.
 2. Asked Claude to *plan* the implementation, refined the plan against
-   reference designs (ByteByteGo Ch. 27 Payment System, Ch. 28 Digital
-   Wallet), then explicitly approved the plan via `ExitPlanMode`.
+   my own logic, then explicitly approved the plan via `ExitPlanMode`.
 3. Asked Claude to *implement* the solution incrementally, with `go test`
    and `go vet` after each layer.
-4. Iterated through review passes (security, simplify, SOLID/OOP audit,
-   requirement audit) and applied focused fixes between each pass.
+4. Iterated through review passes (security, simplify) and applied focused
+   fixes between each pass.
 
 ## Prompts (in order)
 
@@ -36,26 +27,88 @@ I drove the session in a strict **plan-then-execute** loop:
    for practices to be followed. Always follow good practices like SOLID
    design principles, object-oriented design and design patterns."*
 
-2. *"look at the following wallet system design and let's improve the plan if
-   needed."* (followed by the ByteByteGo Ch. 28 *Digital Wallet* chapter
-   pasted as context)
+2. *"validate and refine the plan against my critical judgments listed
+   below"* — communicated the architectural calls captured in
+   "My critical judgments baked into the plan" (persistence choice,
+   service layout, strict idempotency, single-Postgres ACID transaction,
+   `READ COMMITTED + FOR NO KEY UPDATE`, idempotency-table collapse,
+   `PENDING`-transient state machine, replay strategy, per-entity repos,
+   `int64` minor units, no async worker). Claude's job was to draft and
+   refine the plan against these constraints, not to choose them.
 
-3. *"now go through the following system design and improve our design if
-   relevant:"* (followed by the ByteByteGo Ch. 27 *Payment System* chapter)
-
-4. *"do these as well and update the plan: request_hash for v1"* — switching
-   `request_hash` from a documented tradeoff into v1 scope.
-
-5. (Plan-mode answer to two clarifying questions:)
+3. (Plan-mode answer to two clarifying questions:)
    - **Database:** PostgreSQL (recommended)
    - **Layout:** Mirror the internal reference codebase's
      `services/<name>/{init,route,internal/...}` layout
 
-6. Approved the plan via `ExitPlanMode`.
+4. Approved the plan via `ExitPlanMode`.
+
+#### My critical judgments baked into the plan
+
+The architectural calls below were mine — driven by my own reasoning about
+correctness, simplicity, and the assignment's scope. Claude's job in Phase 1
+was to draft and refine the plan against these constraints, not to choose
+them.
+
+- **Persistence: PostgreSQL.** Picked for ACID transactions, FK + UNIQUE
+  constraints, and CHECK as a last-line invariant — the cleanest fit for
+  "correct under concurrency" without adding distributed-transaction
+  machinery.
+- **Service layout:**
+  `services/<name>/{init,route,internal/{svc,repo,data}}`. Mirror the
+  prior internal Go codebase rather than the simpler standard-Go
+  `internal/{...}` layout, so service boundaries are explicit and the
+  project is set up for a future multi-service refactor.
+- **Strict idempotency: enforce `request_hash` in v1**, not as a deferred
+  tradeoff. Same key + different body must return `409
+  IDEMPOTENCY_CONFLICT` so a buggy client surfaces immediately instead of
+  silently getting a stale outcome.
+- **Concurrency: single Postgres ACID transaction with pessimistic row
+  locking**, not Saga / TC/C / 2PC / event-sourcing / optimistic locking.
+  The assignment is a single-node service — distributed-transaction
+  protocols would be cost without benefit.
+- **Isolation: `READ COMMITTED + SELECT FOR NO KEY UPDATE`** over
+  `SERIALIZABLE`, with wallet IDs sorted lexicographically before the lock
+  for deterministic acquisition order. Pessimistic locking is the
+  canonical answer to the read-then-write race and avoids the `40001`
+  retry loop. `FOR NO KEY UPDATE` (not `FOR UPDATE`) is mandatory because
+  the in-flight `INSERT INTO transfers` already holds `FOR KEY SHARE` on
+  the wallet rows from FK enforcement, and `FOR UPDATE` would deadlock
+  with itself across concurrent transfers.
+- **Idempotency table collapse:** the optional `idempotency_records`
+  table from `ASSIGNMENT.md` is folded into `transfers.idempotency_key
+  UNIQUE`. Same uniqueness guarantee, one less moving part.
+- **State machine:** `PENDING → PROCESSED | FAILED`, with `PENDING`
+  transient. The CHECK constraint allows it only so the initial INSERT is
+  legal; under normal operation no committed row is ever `PENDING`.
+  Business-outcome failures (insufficient funds, currency mismatch)
+  **commit a FAILED row** rather than rolling back, so retries replay the
+  failure instead of re-attempting a doomed transfer.
+- **Replay strategy: block on the unique-index xmax lock and return the
+  original committed outcome**, not a `429 Too Many Requests` mid-flight
+  reply. Same exactly-once contract, fewer client retries, and the client
+  gets the actual result on the first retry.
+- **Per-entity repositories** (`Wallet`, `Transfer`, `Ledger`) rather
+  than a single Store. Each repo has 2–3 methods, cohesion is fine, and
+  this matches the prior internal codebase's per-entity pattern.
+- **Money as `int64` minor units (paisa).** Never `float64`. JSON
+  `amount` is decoded as a number per the assignment example; documented
+  that a production-grade API would prefer string to avoid client-side
+  float-precision risk past `2^53 - 1`.
+- **No async worker / outbox / retry queue / DLQ** in v1. `PENDING` is
+  transient; a process crash mid-transaction rolls back entirely,
+  leaving no zombie rows to clean up.
+- **Tests describe intended behavior, not the implementation.** Whenever
+  a test was authored, I instructed Claude to write the assertions from
+  the *contract* (what the API / function *should* do), not by reading
+  the implementation it just produced. This catches the "tests pass
+  because they mirror the bug" failure mode — if the implementation has a
+  defect, the test still asserts the correct behavior and fails. Tests
+  are a *check* on the implementation, not a transcription of it.
 
 ### Phase 2 — implementation
 
-7. (After plan approval) Claude implemented the full solution from scratch:
+5. (After plan approval) Claude implemented the full solution from scratch:
    `go.mod`, migrations, `common/util/money`, `common/error`, domain models,
    request/response DTOs, repo interfaces + Postgres implementations,
    service + service tests, HTTP middleware, handler, route registration,
@@ -64,210 +117,52 @@ I drove the session in a strict **plan-then-execute** loop:
 
 ### Phase 3 — review and refinement
 
-8. *"are we missing anything?"* — caught and fixed the `currency=''`
-   placeholder bug (the initial `INSERT` stored an empty currency that was
-   never updated; idempotent replays returned the wrong currency).
+6. *"are we missing anything?"* — caught the `currency=''` placeholder
+   bug: the initial `INSERT` stored an empty currency that was never
+   updated, so idempotent replays returned the wrong currency. Fixed in
+   `UpdateOutcome`; the ledger-invariant integration test was strengthened
+   to assert canonical currency on every transfer row.
 
-9. *"assignment code repository has review prompts in different files.
-   review the code according to those prompts"* — self-review against
-   `evaluation_guide.md` + `.github/copilot-instructions.md`.
+7. *"review the code against the assignment's review prompts"* — self-
+   review against `evaluation_guide.md` and `.github/copilot-instructions.md`.
+   Wired the unused logger; tightened the ledger-invariant integration
+   test.
 
-10. *"do 1-3 and 5"* — applied four review-driven cleanups: wired the unused
-    logger, strengthened the I3 invariant test for canonical-currency,
-    forbade `t.Parallel()` in integration tests, and added JSON 404/405
-    handlers.
+8. *"fix these: currency CHAR(3) pads with spaces; Hash on DTO"* —
+   switched the schema to `VARCHAR(3)` and moved `hashRequest` from the
+   request DTO into the service package.
 
-11. *"fix these: currency CHAR(3) pads with spaces; Hash on DTO"* — switched
-    the schema to `VARCHAR(3)` and moved `hashRequest` from the request DTO
-    into the service package.
+9. `/security-review` — multi-agent security pass. No HIGH/MEDIUM findings.
 
-12. `/security-review` — ran the bundled multi-agent security review against
-    the diff. No HIGH/MEDIUM findings; verified safe.
+10. `/simplify` — three-agent code-quality / reuse / efficiency pass.
+    Applied the high-leverage findings.
 
-13. `/simplify` — ran the bundled three-agent code-quality / reuse /
-    efficiency review. Applied the high-leverage fixes: collapsed two
-    `UpdateBalance` round-trips into one `UPDATE … CASE WHEN`, replaced
-    `fmt.Sscanf` with `strconv.Atoi`, deduplicated SQLSTATE helpers, removed
-    a misleading comment, simplified `claimOrReplay`'s return signature,
-    unified the integration tests' `post`/`callTransfer` helpers.
+11. *"why can't we hardcode CI commands instead of repo variables?"* —
+    hardcoded `make lint` / `make fmt-check` / `make test` directly into
+    `.github/workflows/ci.yml` so a reviewer doesn't need to set
+    GitHub Actions repo variables.
 
-14. *"are we following good practices like SOLID design principles, object
-    oriented design and design patterns"* — line-by-line audit; confirmed
-    SRP/OCP/LSP/ISP/DIP and listed the patterns in use (Repository, Unit of
-    Work, Adapter, Decorator, State, Value Object, …). Two soft gaps
-    identified.
+12. *"use gorm for postgres but keep the raw sql"* — swapped persistence
+    from `database/sql` + `pgx` stdlib to `gorm.io/gorm`, while keeping
+    every statement as hand-written parameterized SQL via
+    `tx.Raw(...).Row().Scan(...)` / `tx.Exec(...)`. GORM is used purely
+    as connection / transaction manager + raw-SQL executor; no ORM,
+    AutoMigrate, hooks, or struct-tag scanning. `gorm.Config{Logger:
+    Silent, SkipDefaultTransaction: true, TranslateError: false}` so pgx
+    SQLSTATEs propagate verbatim.
 
-15. *"fix highest-leverage a and b"* — extracted `Healthz` into a
-    service-agnostic `common/health` package; lifted `pickWallets` onto a
-    typed `model.Wallets` slice with `.Pick(fromID, toID)`.
+13. *"run the full integration suite and let me know what breaks"* —
+    running the integration + concurrency tests against a real Postgres
+    surfaced a behavioral bug that the unit tests (with hand-written
+    fakes) could not have caught. Fixed by changing the implementation,
+    not by relaxing the test:
 
-16. *"now check all other requirements in assignment and fulfil them. don't
-    miss any requirements"* — migrated `.golangci.yml` from v1 to v2 schema,
-    bumped CI's pinned `golangci-lint` to v2.5.0, fixed nine new lint
-    findings, added the README's missing **API contract & side effects** and
-    **Observability** sections.
+    - **`SQLSTATE 42883: operator does not exist: bigint + text`** in
+      `ApplyBalanceDeltas` — the `UPDATE … CASE id WHEN $1 THEN $2 …`
+      couldn't infer `$2`'s Postgres type from inside the `CASE` arm and
+      resolved it as `text`. Fixed by adding `::bigint` casts on each
+      `THEN` branch.
 
-17. *"anything we are missing. go through all the requirements"* — added
-    `bin/` to `.gitignore`, included `-cover` in `make test`, added a
-    `coverage` Make target, wrote handler-level transport tests
-    (`BadJSON`, `UnknownField`, `PayloadTooLarge`, `MethodNotAllowed`,
-    `NotFound`, `FreshSuccess`, `Replay`, `FailedTransfer`, `GenericError`,
-    `AppError-preserves-status`), and added a `health` package test.
-
-18. *"why … can't be done. can we not just add these in place instead of
-    from env?"* — hardcoded `make lint` / `make fmt-check` / `make test`
-    directly into `.github/workflows/ci.yml` so the candidate no longer has
-    to set repo variables.
-
-19. *"anything we are missing. go through all the requirements"* (again) —
-    added an explicit **"Optional enhancements (ASSIGNMENT.md) — disposition"**
-    section to the README so a reviewer can see at a glance which of the five
-    optional items were considered, which were built, and why each one was
-    skipped.
-
-20. *"anything we are missing. go through all the requirements"* (this
-    response) — created this `AI_TRANSCRIPT.md` to satisfy the AI-disclosure
-    requirement explicitly via the assignment's "list all prompts" fallback.
-
-21. *"anything we are missing. go through all the requirements"* —
-    added the four operational-concerns tests in
-    `common/middleware/middleware_test.go` (panic recovery, panic logging,
-    request-id generation, request-id propagation) so ASSIGNMENT.md's
-    documentation-first-workflow step 5 ("verify observability and
-    operational concerns") is asserted, not just documented. Also added
-    concrete success / failed / error response-body examples to the README's
-    API contract section so a reviewer doesn't have to infer the JSON shape
-    from the Go struct.
-
-22. *"anything we are missing. go through all the requirements"* —
-    verified there are no `TODO` / `FIXME` markers in the code, confirmed
-    every "not built" / "not implemented" string is part of the deliberate
-    Optional-Enhancements disposition section, and updated this transcript
-    to keep the prompt list synchronized through the most recent rounds.
-
-23. *"are we missing any other db unique constraint and indices?"* —
-    audited each FK column against the existing indices, found that
-    `transfers.from_wallet_id` and `transfers.to_wallet_id` were
-    unindexed (Postgres does NOT auto-index the *referencing* side of a FK).
-    Added `idx_transfers_from_wallet` and `idx_transfers_to_wallet` to the
-    migration; updated the down migration; documented the new indexes in
-    the README's schema section.
-
-24. *"have we followed [the Testing Requirements / Red-Blue-Green
-    discipline]?"* — gave an honest accounting: the four explicit test
-    categories are thoroughly covered, but the workflow that produced the
-    tests was incremental-with-tests, not test-first.
-
-25. *"let's follow it"* — demonstrated genuine Red / Blue / Green for one
-    new behavior:
-
-    **Red.** Added `TestWriteError_IncludesRequestIDInBody` asserting that
-    error response bodies must include a `request_id` field so a client
-    can quote the JSON in a bug report. Ran the test:
-
-    ```text
-    --- FAIL: TestWriteError_IncludesRequestIDInBody (0.00s)
-        Error: Not equal: expected: string("trace-abc-123") actual: <nil>
-    ```
-
-    **Blue/Green.** Added a `RequestID` field to `errorBody`, populated
-    it from `RequestIDFromContext` in `WriteError`, `NotFoundHandler`,
-    and `MethodNotAllowedHandler`. Ran the same test:
-
-    ```text
-    ok    common/middleware    0.556s
-    ```
-
-    **Refactor.** Hoisted the `RequestIDFromContext` lookup out of the
-    `if ae.HTTPStatus >= 500` branch in `WriteError` so both the log line
-    and the response body draw from the same value. Updated the README's
-    API-contract error-response example to match the new shape.
-
-    Full regression sweep after the change: 7 packages green, 0 lint
-    issues, gofmt clean.
-
-26. *"use gorm for postgres but keep the raw sql instead of gorm orm form
-    query"* — swapped the persistence layer from `database/sql` + `pgx`
-    stdlib driver to `gorm.io/gorm` + `gorm.io/driver/postgres`, while
-    keeping every statement as hand-written parameterized SQL. This is
-    "GORM as connection / transaction manager + raw-SQL executor", not GORM
-    ORM. Refactor mode (no new behavior; tests stay green throughout).
-
-    Concrete moves:
-    - `config/infra/postgres.go` — `*sql.DB` → `*gorm.DB`; configure pool via
-      `db.DB().Set{MaxOpenConns,MaxIdleConns,ConnMaxLifetime}`; ping via the
-      same underlying `*sql.DB`. `gorm.Config{Logger: Silent,
-      SkipDefaultTransaction: true, TranslateError: false}` so the driver's
-      pgx errors (SQLSTATE) propagate verbatim and the manual `txManager`
-      remains the single source of transactional truth.
-    - `repo/postgres/querier.go` — context key now stores `*gorm.DB`
-      instead of `*sql.Tx`; `mustTxQuerier` returns `tx.WithContext(ctx)`.
-    - `repo/postgres/tx_manager.go` — `db.WithContext(ctx).Transaction(fn,
-      &sql.TxOptions{Isolation: ReadCommitted})`; GORM's Transaction handles
-      panic-rollback for us.
-    - `repo/postgres/{wallet,transfer,ledger}_repo.go` — every
-      `q.ExecContext(...)` → `q.Exec(sql, args...)` (returns `*gorm.DB` with
-      `.Error` and `.RowsAffected`); every `q.QueryRowContext(...).Scan(...)`
-      → `q.Raw(sql, args...).Row().Scan(...)`; every `q.QueryContext(...)` →
-      `q.Raw(sql, args...).Rows()`. The `INSERT ... ON CONFLICT DO NOTHING
-      RETURNING` and `SELECT ... FOR UPDATE` patterns are unchanged.
-    - `common/health/health.go` — Ping pulled from `db.DB()`.
-    - `services/transfer/init/transfer_init.go` — `Config.DB` typed as
-      `*gorm.DB`.
-    - `tests/integration/helpers.go` — env now carries both `*gorm.DB` (for
-      `transferinit.Config`) and the underlying `*sql.DB` (for
-      golang-migrate and the raw-SQL test helpers).
-
-    Verification: 53 tests across 7 packages green with `-race`,
-    `golangci-lint run` and `--build-tags=integration` both `0 issues`,
-    `go vet` clean both tags, `gofmt -l .` empty.
-
-## Status at end of session
-
-- 52 unit + handler + middleware tests across 7 packages, all green with `-race`
-- 9 integration + concurrency tests behind the `integration` build tag; build
-  cleanly and skip when `INTEGRATION_DATABASE_URL` is unset
-- `golangci-lint run ./...` and `--build-tags=integration ./...` both report
-  `0 issues`
-- `go vet` clean for both build tags
-- `gofmt -l .` empty
-- README covers Architecture, Schema, Idempotency strategy, Concurrency
-  strategy, State machine, API contract & side effects (with response body
-  examples), Observability, How to run (with prerequisites), How to test,
-  Tradeoffs, Optional-enhancement disposition, Design philosophy, Scaling
-  path, AI usage disclosure
-
-## What I judged the human owned
-
-- The choice of Postgres + `FOR UPDATE` over Saga / event sourcing /
-  optimistic locking.
-- The decision to mirror an internal reference codebase's
-  `services/<name>/{init,route,internal/...}` layout rather than the simpler
-  standard-Go `internal/{...}` layout.
-- The decision to enforce `request_hash` in v1 rather than defer it.
-- The decision to keep `sonar-project.properties` as the assignment template
-  shipped it (after I had auto-rewritten it Go-aware, the user reverted).
-- All review-and-integrate decisions, including which review findings to act
-  on and which to deliberately skip.
-
-## What I judged Claude Code did well
-
-- Plan-then-execute discipline — every non-trivial change was specified in
-  the plan file before code was written.
-- Incremental verification: `go test` + `go vet` after every layer.
-- Catching its own bug (`currency=''` placeholder) on the *follow-up* audit
-  rather than at write time. The fix included a strengthened test (I3 now
-  asserts persisted currency on every transfer row) so the regression
-  cannot recur.
-
-## What did not go well
-
-- Initial schema used `CHAR(3)` for currency (space-padded). Surfaced as a
-  paper cut later; switched to `VARCHAR(3) CHECK (char_length = 3)`.
-- The `Hash()` function originally lived on the request DTO. A strict reading
-  of "service owns identity decisions" pushed it into the service package.
-- The first `claimOrReplay` signature returned a value-typed transfer *or* a
-  pointer-typed replay; later collapsed to `(*Transfer, bool, error)`.
-- The first `WalletRepoIface` exposed per-wallet `UpdateBalance`; collapsed
-  into `ApplyBalanceDeltas([]BalanceDelta)` which removes one DB round-trip
-  per successful transfer.
+    Reinforces the testing methodology from Phase 1: tests written from
+    the contract surface real defects; tests transcribed from the
+    implementation would have masked them.

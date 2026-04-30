@@ -1,4 +1,3 @@
--- 0001_init.down.sql
 -- Drop the wallet-transfer schema. Reverse order of creation to respect FKs.
 
 DROP INDEX IF EXISTS idx_transfers_from_wallet;

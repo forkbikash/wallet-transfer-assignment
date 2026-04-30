@@ -38,7 +38,7 @@ password).
    verbatim transcript with model responses is preserved in Claude Code's
    local session log and is available on request. The bullet list in
    `AI_TRANSCRIPT.md` satisfies the "give us all the prompts that you
-   used" fallback option from `ASSIGNMENT.md` §AI usage point 3 even
+   used" fallback option from `ASSIGNMENT.md` AI-usage point 3 even
    if a full transcript export is not feasible at submission time.
 
    Bugs that Claude itself caught on review (and how) are also documented:
@@ -48,7 +48,7 @@ password).
 
 ## Schema Design
 
-Three tables (`migrations/0001_init.up.sql`).
+Three tables, defined under `migrations/`.
 
 ```sql
 CREATE TABLE wallets (
