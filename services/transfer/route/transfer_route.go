@@ -24,8 +24,14 @@ func InitRoutes(router *mux.Router, h *handler.TransferHandler, logger *slog.Log
 	router.Use(middleware.MaxBodyBytes(MaxRequestBodyBytes))
 
 	// JSON 404 / 405 instead of gorilla/mux's plain-text defaults.
-	router.NotFoundHandler = middleware.NotFoundHandler()
-	router.MethodNotAllowedHandler = middleware.MethodNotAllowedHandler()
+	//
+	// Wrap these explicitly with RequestID: gorilla/mux does NOT run the
+	// router's `Use(...)` middleware on `NotFoundHandler` /
+	// `MethodNotAllowedHandler`, so without this wrap the RequestID middleware
+	// would be skipped and the documented X-Request-ID contract would not hold
+	// for unmatched routes / methods.
+	router.NotFoundHandler = middleware.RequestID(middleware.NotFoundHandler())
+	router.MethodNotAllowedHandler = middleware.RequestID(middleware.MethodNotAllowedHandler())
 
 	router.HandleFunc("/transfers", h.CreateTransfer).Methods(http.MethodPost)
 }
