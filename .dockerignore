@@ -37,4 +37,7 @@ LICENSE
 branch-protection-checklist.md
 
 # Integration tests are not exercised in the builder stage.
-tests/integration/
+internal/wallet/test/
+
+# Design docs are not needed in the image.
+doc/

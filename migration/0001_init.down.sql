@@ -1,8 +1,7 @@
--- Drop the wallet-transfer schema. Reverse order of creation to respect FKs.
-
-DROP INDEX IF EXISTS idx_transfers_from_wallet;
-DROP INDEX IF EXISTS idx_transfers_to_wallet;
-DROP INDEX IF EXISTS idx_ledger_wallet_created;
+-- Drop the wallet schema.
+DROP TABLE IF EXISTS transaction_outcomes;
+DROP TABLE IF EXISTS saga_transactions;
 DROP TABLE IF EXISTS ledger_entries;
-DROP TABLE IF EXISTS transfers;
-DROP TABLE IF EXISTS wallets;
+DROP TABLE IF EXISTS event_outbox;
+DROP TABLE IF EXISTS processed_commands;
+DROP TABLE IF EXISTS accounts;
